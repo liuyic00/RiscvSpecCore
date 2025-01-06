@@ -44,7 +44,7 @@ trait LoadStore extends BaseCore with MMU {
       )
     )
   }
-  def memRead(addr: UInt, memWidth: UInt): UInt = {
+  def memRead(addr: UInt, memWidth: UInt): UInt = {//至少说明处理过，这就表示应该是对齐访问的然后按照要求进行的，然后再返回相应的值
     if (!config.functions.tlb) {
       val bytesWidth = log2Ceil(XLEN / 8)
       val rOff       = addr(bytesWidth - 1, 0) << 3 // addr(byteWidth-1,0) * 8

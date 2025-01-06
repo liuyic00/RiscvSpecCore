@@ -2,13 +2,13 @@ package rvspeccore.core.spec.instset.csr
 
 import chisel3._
 import chisel3.util._
-
 import rvspeccore.core.BaseCore
 import rvspeccore.core.spec._
 import rvspeccore.core.tool.BitTool._
 import rvspeccore.core.RVConfig
+import rvspeccore.core.tool.CheckTool
 
-trait CSRSupport extends BaseCore with ExceptionSupport {
+trait CSRSupport extends BaseCore with ExceptionSupport with CheckTool {
   // def ModeU     = 0x0.U // 00 User/Application
   // def ModeS     = 0x1.U // 01 Supervisor
   // def ModeR     = 0x2.U // 10 Reserved
@@ -48,7 +48,7 @@ trait CSRSupport extends BaseCore with ExceptionSupport {
         }
       }
     }
-
+//    doCSRRead(64)
     switch(now.csr.MXLEN) {
       is(32.U(8.W)) { doCSRRead(32) }
       is(64.U(8.W)) { if (XLEN >= 64) { doCSRRead(64) } }
@@ -68,9 +68,10 @@ trait CSRSupport extends BaseCore with ExceptionSupport {
           // printf("[Debug]Find ADDR, %x %x\n", (info.wfn != null).B, (info.wmask != UnwritableMask).B)
           if (info.wfn.isDefined && info.wmask(XLEN) != UnwritableMask) {
             nextCSR := info.wfn.get(XLEN)((nowCSR & ~info.wmask(XLEN)) | (data & info.wmask(XLEN)))
+            updateNextCsrWrite(addr)
             // printf("[Debug]CSR_Write:(Addr: %x, nowCSR: %x, nextCSR: %x)\n", addr, nowCSR, nextCSR)
           } else {
-            // TODO: might cause some exception?
+            // if write, this will has exception
           }
         }
       }

@@ -2,11 +2,11 @@ package rvspeccore.core.spec.instset
 
 import chisel3._
 import chisel3.util._
-
 import rvspeccore.core.BaseCore
 import rvspeccore.core.spec._
 import rvspeccore.core.tool.BitTool._
 import csr._
+import rvspeccore.core.tool.CheckTool
 
 /** “Zicsr” Control and Status Register (CSR) Instructions
   *
@@ -63,21 +63,22 @@ trait ZicsrDecode extends CommonDecode {
   *   - Chapter 9 “Zicsr”, Control and Status Register (CSR) Instructions,
   *     Version 2.0
   */
-trait ZicsrExtension extends BaseCore with ZicsrDecode with ZicsrExtensionInsts with CSRSupport with ExceptionSupport {
+trait ZicsrExtension extends BaseCore with ZicsrDecode with ZicsrExtensionInsts with CSRSupport with ExceptionSupport with CheckTool{
   def wen(addr: UInt, justRead: Bool = false.B): Bool = {
     // TODO: has a reference to document?
     // TODO: what is wen mean?
     // val justRead = isSet && src1 === 0.U  // csrrs and csrrsi are exceptions when their src1 is zero
     val isIllegalWrite = addr(11, 10) === "b11".U && (!justRead)
-    val isIllegalMode  = now.internal.privilegeMode < addr(9, 8)
+    val isIllegalMode = now.internal.privilegeMode < addr(9, 8)
     // val isIllegalWrite = wen && (addr(11, 10) === "b11".U) && !justRead  // Write a read-only CSR register
     val isIllegalAccess = isIllegalMode || isIllegalWrite
-    val has: Bool       = MuxLookup(addr, false.B)(now.csr.table.map { x => x.info.addr -> true.B })
+    val has: Bool = MuxLookup(addr, false.B)(now.csr.table.map { x => x.info.addr -> true.B })
     when(isIllegalAccess || !has) {
       raiseException(MExceptionCode.illegalInstruction)
     }
     isIllegalWrite
   }
+
   def doRVZicsr: Unit = {
     when(CSRRW(inst)) {
       // t = CSRs[csr]; CSRs[csr] = x[rs1]; x[rd] = t
@@ -85,7 +86,9 @@ trait ZicsrExtension extends BaseCore with ZicsrDecode with ZicsrExtensionInsts 
       when(!wen(csrAddr)) {
         when(rd =/= 0.U) {
           next.reg(rd) := zeroExt(csrRead(csrAddr), XLEN)
+          updateNextWrite(rd)
         }
+        checkSrcImm(rs1)
         csrWrite(csrAddr, now.reg(rs1))
       }
 
@@ -93,8 +96,10 @@ trait ZicsrExtension extends BaseCore with ZicsrDecode with ZicsrExtensionInsts 
     when(CSRRS(inst)) {
       // t = CSRs[csr]; CSRs[csr] = t | x[rs1]; x[rd] = t
       decodeI_Zicsr
-      when(!wen(csrAddr, now.reg(rs1) === 0.U)) {
+      when(!wen(csrAddr, rs1 === 0.U)) {
         next.reg(rd) := zeroExt(csrRead(csrAddr), XLEN)
+        updateNextWrite(rd)
+        checkSrcImm(rs1)
         when(rs1 =/= 0.U) {
           csrWrite(csrAddr, zeroExt(csrRead(csrAddr), XLEN) | now.reg(rs1))
         }
@@ -103,8 +108,10 @@ trait ZicsrExtension extends BaseCore with ZicsrDecode with ZicsrExtensionInsts 
     when(CSRRC(inst)) {
       // t = CSRs[csr]; CSRs[csr] = t &~x[rs1]; x[rd] = t
       decodeI_Zicsr
-      when(!wen(csrAddr)) {
+      when(!wen(csrAddr, rs1 === 0.U)) {
         next.reg(rd) := zeroExt(csrRead(csrAddr), XLEN)
+        updateNextWrite(rd)
+        checkSrcImm(rs1)
         when(rs1 =/= 0.U) {
           // FIXME: 新写法wmask下导致的失灵 [待验证]
           csrWrite(csrAddr, zeroExt(csrRead(csrAddr), XLEN) & ~now.reg(rs1))
@@ -117,6 +124,7 @@ trait ZicsrExtension extends BaseCore with ZicsrDecode with ZicsrExtensionInsts 
       when(!wen(csrAddr)) {
         when(rd =/= 0.U) {
           next.reg(rd) := zeroExt(csrRead(csrAddr), XLEN)
+          updateNextWrite(rd)
         }
         csrWrite(csrAddr, zeroExt(rs1, XLEN))
       }
@@ -124,8 +132,9 @@ trait ZicsrExtension extends BaseCore with ZicsrDecode with ZicsrExtensionInsts 
     when(CSRRSI(inst)) {
       // t = CSRs[csr]; CSRs[csr] = t | zimm; x[rd] = t
       decodeI_Zicsr
-      when(!wen(csrAddr, now.reg(rs1) === 0.U)) {
+      when(!wen(csrAddr, rs1 === 0.U)) {
         next.reg(rd) := zeroExt(csrRead(csrAddr), XLEN)
+        updateNextWrite(rd)
         // TODO: might have some exceptions when csrrs and csrrsi rs1 is zero?
         when(rs1 =/= 0.U) {
           csrWrite(csrAddr, zeroExt(csrRead(csrAddr), XLEN) | zeroExt(rs1, XLEN))
@@ -135,8 +144,9 @@ trait ZicsrExtension extends BaseCore with ZicsrDecode with ZicsrExtensionInsts 
     when(CSRRCI(inst)) {
       // t = CSRs[csr]; CSRs[csr] = t &~zimm; x[rd] = t
       decodeI_Zicsr
-      when(!wen(csrAddr)) {
+      when(!wen(csrAddr, rs1 === 0.U)) {
         next.reg(rd) := zeroExt(csrRead(csrAddr), XLEN)
+        updateNextWrite(rd)
         when(rs1 =/= 0.U) {
           // FIXME: 新写法wmask下导致的失灵？ [待验证]
           csrWrite(csrAddr, zeroExt(csrRead(csrAddr), XLEN) & ~zeroExt(rs1, XLEN))

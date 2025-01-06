@@ -1,13 +1,9 @@
 package rvspeccore.core
 
-import chisel3._
+import chisel3.{Input, _}
 import chisel3.util._
-
 import spec._
-import spec.instset.csr.CSR
-import spec.instset.csr.EventSig
-import spec.instset.csr.SatpStruct
-
+import spec.instset.csr.{CSR, CSRInfoSignal, EventSig, SatpStruct}
 import rvspeccore.checker.ArbitraryRegFile
 
 abstract class BaseCore()(implicit val config: RVConfig) extends Module {
@@ -27,6 +23,17 @@ abstract class BaseCore()(implicit val config: RVConfig) extends Module {
 }
 class GlobalData extends Bundle {
   val setpc = Bool()
+}
+
+class WbIO()(implicit XLEN: Int) extends Bundle{
+  val inst    = Input(UInt(32.W))
+  val valid   = Input(Bool())
+  val pc      = Input(UInt(XLEN.W))
+  val rs1     = Input(UInt(5.W))
+  val rs2     = Input(UInt(5.W))
+  val rs1Data = Input(UInt(XLEN.W))
+  val rs2Data = Input(UInt(XLEN.W))
+  val csrAddr = Input(UInt(12.W))
 }
 class ReadMemIO()(implicit XLEN: Int) extends Bundle {
   val valid    = Output(Bool())
@@ -65,11 +72,29 @@ object Internal {
 }
 
 class State()(implicit XLEN: Int, config: RVConfig) extends Bundle {
+
+
   val reg = Vec(32, UInt(XLEN.W))
   val pc  = UInt(XLEN.W)
   val csr = CSR()
 
+  val rd_addr =  UInt(5.W)
+  val rd_data =  UInt(XLEN.W)
+  val rd_en   =  Bool()
+
+  val csr_addr = UInt(12.W)
+  val csr_wr   = Bool()
+
+  val rs1_addr = UInt(5.W)
+  val rs2_addr = UInt(5.W)
+
+  val rs1_data = UInt(XLEN.W)
+  val rs2_data = UInt(XLEN.W)
+
   val internal = Internal()
+
+  val checkrs1 = Bool()
+  val checkrs2 = Bool()
 }
 
 object State {
@@ -83,6 +108,23 @@ object State {
     }
     state.pc  := config.initValue.getOrElse("pc", "h8000_0000").U(XLEN.W)
     state.csr := CSR.wireInit()
+
+    state.rd_data := 0.U
+
+    state.rd_addr := 0.U
+    state.rd_en   := false.B
+
+    state.rs1_addr := 0.U
+    state.rs2_addr := 0.U
+
+    state.rs1_data := 0.U
+    state.rs2_data := 0.U
+
+    state.csr_wr := false.B
+    state.csr_addr := 0.U
+
+    state.checkrs1 := false.B
+    state.checkrs2 := false.B
 
     state.internal := Internal.wireInit()
 
@@ -147,6 +189,15 @@ class RiscvTrans()(implicit config: RVConfig) extends BaseCore with RVInstSet {
     // End excute
     next.reg(0) := 0.U
 
+    // debug
+    assert(RegNext(next.csr.mstatus) === RegNext(next.csr.mstatus))
+    assert(RegNext(now.csr.mstatus) === RegNext(now.csr.mstatus))
+
+    when(next.rd_addr === 0.U) {
+      next.rd_data := 0.U
+      next.rd_en   := false.B
+    }
+
     when(!global_data.setpc) {
       if (config.extensions.C) {
         // + 4.U for 32 bits width inst
@@ -156,7 +207,6 @@ class RiscvTrans()(implicit config: RVConfig) extends BaseCore with RVInstSet {
         next.pc := now.pc + 4.U
       }
     }
-
     tryRaiseException()
   }
 
@@ -201,4 +251,45 @@ class RiscvCore()(implicit config: RVConfig) extends Module {
   io.next     := trans.io.next
   io.event    := trans.io.event
   io.iFetchpc := trans.io.iFetchpc
+}
+
+class RiscvCoreTrans()(implicit config: RVConfig) extends Module{
+  implicit val XLEN: Int = config.XLEN
+
+  val io = IO(new Bundle {
+    // Processor IO
+    val wb       = new WbIO()
+    val iFetchpc = Output(UInt(XLEN.W))
+    val mem      = new MemIO
+    val tlb      = if (config.functions.tlb) Some(new TLBIO) else None
+
+    val now  = Input(State())
+
+    val next = Output(State())
+    // Exposed signals
+    val event = Output(new EventSig)
+  })
+
+  val state = State.wireInit()
+  val trans = Module(new RiscvTrans())
+
+  trans.io.inst  := io.wb.inst
+  trans.io.valid := io.wb.valid
+  trans.io.mem <> io.mem
+  trans.io.tlb.map(_ <> io.tlb.get)
+
+  trans.io.now := state
+  state.pc     := io.wb.pc
+
+  state.rs1_addr := io.wb.rs1
+  state.rs2_addr := io.wb.rs2
+  state.rs1_data := io.wb.rs1Data
+  state.rs2_data := io.wb.rs2Data
+
+  state.csr := io.now.csr
+
+  io.next     := trans.io.next
+  io.event    := trans.io.event
+  io.iFetchpc := trans.io.iFetchpc
+
 }
